@@ -1,0 +1,1 @@
+This is the 3rd exercise of the Parallel and Distributed Systems class of Electrical Engineering and Computer Engineering department at Aristotle University of Thessaloniki. It is a parallel implemetation of the Page Rank algorithm using the Gauss-Seidle method.
