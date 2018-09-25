@@ -19,12 +19,23 @@ double get_element(int i, int j, int number_of_nodes, int number_of_links);
 double calculate_error(int number_of_nodes);
 void gauss_seidel(int number_of_nodes, int max_number_of_iterations, int number_of_links);
 
+void graph_coloring(int number_of_nodes, int number_of_links);
+
+typedef struct {
+    int start;
+    int end;
+    int until;
+    int color;
+} Group;
+
 //Global variables.
 int *IA, *JA, *dangling_nodes;
 double *value_of_page, *page_rank, *page_rank_previous, *b;
 int number_of_threads;
 double desired_error;
 char folder_name[128];
+Group *groups;
+int number_of_groups;
 
 int main(int argc, char **argv) {
 
@@ -65,6 +76,7 @@ int main(int argc, char **argv) {
     page_rank = (double *)malloc(sizeof(double) * number_of_nodes);
     page_rank_previous = (double *)malloc(sizeof(double) * number_of_nodes);
     b = (double *)malloc(sizeof(double) * number_of_nodes);
+    groups = (Group *)malloc(sizeof(Group) * number_of_nodes);
 
     if (JA == NULL || value_of_page == NULL || dangling_nodes == NULL
         || page_rank == NULL || page_rank_previous == NULL || b == NULL) {
@@ -106,6 +118,8 @@ int main(int argc, char **argv) {
     
     }
 
+    graph_coloring(number_of_nodes, number_of_links);
+
     //Time the Page Rank algorithm.
     double start = omp_get_wtime();
     gauss_seidel(number_of_nodes, max_number_of_iterations, number_of_links);
@@ -121,6 +135,7 @@ int main(int argc, char **argv) {
     free(page_rank);
     free(page_rank_previous);
     free(b);
+    free(groups);
 
 }
 
@@ -378,6 +393,151 @@ double get_element(int i, int j, int number_of_nodes, int number_of_links) {
 
 }
 
+/*
+    Separates the nodes into groups of colors so they can
+    be executed in parallel later. The exact algorithm is
+    explained in the report.
+*/
+void graph_coloring(int number_of_nodes, int number_of_links) {
+
+    int i, j, min, max;
+    double value;
+
+    int group = -1;
+
+    for (j = 0; j < number_of_nodes; j++) {
+
+        max = -1;
+        min = number_of_nodes;
+
+        /*
+            If we have a dangling node then we consider it 
+            a group on its own.
+        */
+        if (dangling_nodes[j] == 1) {
+            
+            //New color.
+            group++;
+            groups[group].color = group;
+            groups[group].start = j;
+            groups[group].end = j;
+            groups[group].until = j;
+            continue;
+        }
+
+        for (i = 0; i < number_of_nodes; i++) {
+
+            value = get_element(i, j, number_of_nodes, number_of_links);
+
+            if (fabs(value) > 0.00 && i < j) {
+
+                if (i == j - 1) {
+
+                    max = i;
+                    break;
+
+                }
+
+                if (i > max) {
+
+                    max = i;
+
+                }
+
+                if (i < min && i > j) {
+
+                    min = i;
+
+                }
+
+            }
+        
+        }
+
+        if (max == j - 1) {
+
+            //New color.
+            group++;
+            groups[group].color = group;
+            groups[group].start = j;
+            groups[group].end = j;
+            groups[group].until = min;
+
+        } else if (max < j - 1) {
+
+            //Merge with previous color if (j-1) color has not the same color with (max).
+            if (max >= groups[group].start && max <= groups[group].end) {
+                
+                //New color.
+                group++;
+                groups[group].color = group;
+                groups[group].start = j;
+                groups[group].end = j;
+                groups[group].until = min;
+
+            } else {
+
+                if (groups[group].until < j) {
+
+                    //New color.
+                    group++;
+                    groups[group].color = group;
+                    groups[group].start = j;
+                    groups[group].end = j;
+                    groups[group].until = min;
+
+                } else {
+
+                    groups[group].end = j;
+                    if (groups[group].until > min) {
+                        groups[group].until = min;
+                    }
+
+                }
+
+            }
+
+        } else {
+
+            if (group > -1) {
+
+                if (groups[group].until < j) {
+
+                    //New color.
+                    group++;
+                    groups[group].color = group;
+                    groups[group].start = j;
+                    groups[group].end = j;
+                    groups[group].until = min;
+
+                } else {
+
+                    groups[group].end = j;
+                    if (groups[group].until > min) {
+                        groups[group].until = min;
+                    }
+
+                }
+
+            } else {
+
+                //New color.
+                group++;
+                groups[group].color = group;
+                groups[group].start = j;
+                groups[group].end = j;
+                groups[group].until = min;
+
+            }
+
+        }
+
+    }
+
+    number_of_groups = group + 1;
+
+}
+
 void prepare_values(double *values, int i, int number_of_nodes, int number_of_links) {
 
     int j;
@@ -417,43 +577,83 @@ double calculate_error(int number_of_nodes) {
 */
 void gauss_seidel(int number_of_nodes, int max_number_of_iterations, int number_of_links) {
 
-    int i, j, k;
+    int i, j, k, l, group_size;
     double sum;
-
-    double *values = (double *)malloc(sizeof(double) * number_of_nodes);
 
     for (k = 0; k < max_number_of_iterations; k++) {
 
-        for (i = 0; i < number_of_nodes; i++) {
+        for (l = 0; l < number_of_groups; l++) {
 
-            sum = 0.0;
-            
-            prepare_values(values, i, number_of_nodes, max_number_of_iterations);
+            group_size = groups[l].end - groups[l].start + 1;
 
-            for (j = 0; j < number_of_nodes; j++) {
+            /*
+                If group_size is greater than 2 then we can use
+                a parallel for. Otherwise, it's not efficient.
+            */
+            if (group_size > 2) {
 
-                if (i != j) {
+                #pragma omp parallel for private(i, j, sum) num_threads(number_of_threads)
+                for (i = groups[l].start; i <= groups[l].end; i++) {
 
-                    sum += values[j] * page_rank[j];
+                    sum = 0.0;
+                    double *values = (double *)malloc(sizeof(double) * number_of_nodes);
+                    prepare_values(values, i, number_of_nodes, max_number_of_iterations);
 
+                    for (j = 0; j < number_of_nodes; j++) {
+
+                        if (i != j) {
+
+                            sum += values[j] * page_rank[j];
+
+                        }
+                    
+                    }
+
+                    //Storing the previous value of i-th page rank.
+                    page_rank_previous[i] = page_rank[i];
+
+                    page_rank[i] = (dangling_nodes[i] == 1) ? (1/(value_of_page[i] + 1.0)) * (b[i] - sum) : ( 1 /get_element(i, i, number_of_nodes, number_of_links)) * (b[i] - sum);
+                
+                    free(values);
+                
                 }
-            
+
+            } else {
+                
+                for (i = groups[l].start; i <= groups[l].end; i++) {
+
+                    sum = 0.0;
+                    double *values = (double *)malloc(sizeof(double) * number_of_nodes);
+                    prepare_values(values, i, number_of_nodes, max_number_of_iterations);
+
+                    for (j = 0; j < number_of_nodes; j++) {
+
+                        if (i != j) {
+
+                            sum += values[j] * page_rank[j];
+
+                        }
+                    
+                    }
+
+                    //Storing the previous value of i-th page rank.
+                    page_rank_previous[i] = page_rank[i];
+
+                    page_rank[i] = (dangling_nodes[i] == 1) ? (1/(value_of_page[i] + 1.0)) * (b[i] - sum) : ( 1 /get_element(i, i, number_of_nodes, number_of_links)) * (b[i] - sum);
+                
+                    free(values);
+                
+                }
+
             }
 
-            //Storing the previous value of i-th page rank.
-            page_rank_previous[i] = page_rank[i];
+            if (calculate_error(number_of_nodes) < desired_error) {
+                printf("Iterations: %d \n", k + 1);
+                return;
+            }
 
-            page_rank[i] = (dangling_nodes[i] == 1) ? (1/(value_of_page[i] + 1.0)) * (b[i] - sum) : ( 1 /get_element(i, i, number_of_nodes, number_of_links)) * (b[i] - sum);
-        
         }
-
-        if (calculate_error(number_of_nodes) < desired_error) {
-            printf("Iterations: %d \n", k + 1);
-			return;
-		}
     
     }
-
-    free(values);
 
 }
