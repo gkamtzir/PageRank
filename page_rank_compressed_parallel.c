@@ -14,7 +14,7 @@ void write_page_rank_to_file(double *page_rank, int number_of_nodes);
 int get_total_number_of_nodes();
 int get_number_of_links(int number_of_nodes, double *value_of_page, int *dangling_nodes);
 void compressed_sparse_row(int number_of_nodes);
-void prepare_values(double *values, int i, int number_of_nodes, int number_of_links);
+void prepare_values(double *values, int i, int number_of_nodes, int number_of_links, int parallel);
 double get_element(int i, int j, int number_of_nodes, int number_of_links);
 double calculate_error(int number_of_nodes);
 void gauss_seidel(int number_of_nodes, int max_number_of_iterations, int number_of_links);
@@ -538,11 +538,11 @@ void graph_coloring(int number_of_nodes, int number_of_links) {
 
 }
 
-void prepare_values(double *values, int i, int number_of_nodes, int number_of_links) {
+void prepare_values(double *values, int i, int number_of_nodes, int number_of_links, int parallel) {
 
     int j;
 
-    #pragma omp parallel for private(j) num_threads(number_of_threads)
+    #pragma omp parallel for private(j) num_threads(number_of_threads) if (parallel)
     for (j = 0; j < number_of_nodes; j++) {
 
         if (i != j) {
@@ -597,7 +597,7 @@ void gauss_seidel(int number_of_nodes, int max_number_of_iterations, int number_
 
                     sum = 0.0;
                     double *values = (double *)malloc(sizeof(double) * number_of_nodes);
-                    prepare_values(values, i, number_of_nodes, max_number_of_iterations);
+                    prepare_values(values, i, number_of_nodes, max_number_of_iterations, 0);
 
                     for (j = 0; j < number_of_nodes; j++) {
 
@@ -624,7 +624,7 @@ void gauss_seidel(int number_of_nodes, int max_number_of_iterations, int number_
 
                     sum = 0.0;
                     double *values = (double *)malloc(sizeof(double) * number_of_nodes);
-                    prepare_values(values, i, number_of_nodes, max_number_of_iterations);
+                    prepare_values(values, i, number_of_nodes, max_number_of_iterations, 1);
 
                     for (j = 0; j < number_of_nodes; j++) {
 
